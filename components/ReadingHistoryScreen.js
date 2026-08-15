@@ -1,93 +1,141 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, Alert } from 'react-native';
+import {
+  View,
+  Text,
+  FlatList,
+  TouchableOpacity,
+  StyleSheet,
+  Platform,
+  StatusBar,
+} from 'react-native';
+import { Image as ExpoImage } from 'expo-image';
+import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import axios from 'axios';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useIsFocused } from '@react-navigation/native';
 
 const ReadingHistoryScreen = () => {
+  const statusBarHeight = Platform.OS === 'android' ? (StatusBar.currentHeight || 24) : 44;
   const [history, setHistory] = useState([]);
   const navigation = useNavigation();
+  const isFocused = useIsFocused();
 
-  useEffect(() => {
-    const fetchReadingHistory = async () => {
-      try {
-        const storedHistory = await AsyncStorage.getItem('readingHistory');
-        const historyArray = storedHistory ? JSON.parse(storedHistory) : [];
-
-        // Fetch manga titles for each mangaId in history
-        const updatedHistory = await Promise.all(historyArray.map(async item => {
-          if (!item.mangaTitle) {
-            try {
-              const response = await axios.get(`https://api.mangadex.org/manga/${item.mangaId}`);
-              const mangaTitle = response.data.data.attributes.title.en || 'No Title';
-              return { ...item, mangaTitle };
-            } catch (error) {
-              console.error(`Error fetching title for mangaId ${item.mangaId}:`, error);
-              return { ...item, mangaTitle: 'Unknown Title' };
-            }
-          }
-          return item;
-        }));
-
-        // Save the updated history with manga titles back to AsyncStorage
-        await AsyncStorage.setItem('readingHistory', JSON.stringify(updatedHistory));
-        
-        // Set history state with reversed order (from newest to oldest)
-        setHistory(updatedHistory.reverse());
-      } catch (error) {
-        console.error('Error loading reading history:', error);
-      }
-    };
-
-    fetchReadingHistory();
-  }, []);
-
-  const handlePress = (item) => {
-    console.log('Item pressed:', item); // Debug log
-    navigation.navigate('Read', { chapterId: item.chapterId, mangaId: item.mangaId, mangaTitle: item.mangaTitle });
-  };
-
-  const handleDelete = async (mangaId, chapterId) => {
+  const fetchReadingHistory = async () => {
     try {
-      // Filter out the item to be deleted
-      const updatedHistory = history.filter(item => !(item.mangaId === mangaId && item.chapterId === chapterId));
-      await AsyncStorage.setItem('readingHistory', JSON.stringify(updatedHistory));
-      setHistory(updatedHistory); // Update history state without reversing
-      Alert.alert('Success', 'Item deleted from reading history.');
+      const stored = (await AsyncStorage.getItem('readingHistory')) || '[]';
+      const arr = JSON.parse(stored);
+      setHistory(arr);
     } catch (error) {
-      console.error('Error deleting item from reading history:', error);
-      Alert.alert('Error', 'Failed to delete item from reading history.');
+      console.error('Error loading history:', error);
     }
   };
 
-  const renderItem = ({ item }) => (
-    <View style={styles.itemContainer}>
-      <TouchableOpacity
-        style={styles.item}
-        onPress={() => handlePress(item)}
-      >
-        <Text style={styles.chapterTitle}>
-          {item.mangaTitle} - Chapter {item.chapterNumber}
-        </Text>
-      </TouchableOpacity>
-      <TouchableOpacity
-        style={styles.deleteButton}
-        onPress={() => handleDelete(item.mangaId, item.chapterId)}
-      >
-        <Text style={styles.deleteText}>Delete</Text>
-      </TouchableOpacity>
-    </View>
-  );
+  useEffect(() => {
+    if (isFocused) {
+      fetchReadingHistory();
+    }
+  }, [isFocused]);
+
+  const handleResume = (item) => {
+    navigation.navigate('Read', {
+      chapterSlug: item.chapterSlug || item.chapterId,
+      chapterEndpoint: item.chapterSlug || item.chapterId,
+      chapterTitle: item.chapterTitle || item.chapterNumber || 'Chapter',
+      mangaTitle: item.mangaTitle || 'Komik',
+      mangaSlug: item.slug || item.mangaId,
+    });
+  };
+
+  const handleDelete = async (indexToDelete) => {
+    try {
+      const updated = history.filter((_, idx) => idx !== indexToDelete);
+      await AsyncStorage.setItem('readingHistory', JSON.stringify(updated));
+      setHistory(updated);
+    } catch (error) {
+      console.error('Error deleting reading history:', error);
+    }
+  };
+
+  const renderItem = ({ item, index }) => {
+    const formattedDate = item.timestamp
+      ? new Date(item.timestamp).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })
+      : 'Terakhir dibaca';
+
+    const thumbnail = item.thumbnail || item.image || item.mangaThumbnails;
+
+    return (
+      <View style={styles.card}>
+        <TouchableOpacity
+          style={styles.cardContent}
+          onPress={() => handleResume(item)}
+          activeOpacity={0.85}
+        >
+          {/* Comic Cover Image instead of Icon */}
+          {thumbnail ? (
+            <ExpoImage
+              source={{ uri: thumbnail }}
+              style={styles.cardImage}
+              contentFit="cover"
+              cachePolicy="memory-disk"
+            />
+          ) : (
+            <View style={[styles.cardImage, styles.placeholderImage]}>
+              <Ionicons name="book-outline" size={24} color="#9EA5BA" />
+            </View>
+          )}
+
+          <View style={styles.textContainer}>
+            <Text style={styles.mangaTitle} numberOfLines={1}>
+              {item.mangaTitle || 'Untitled Manga'}
+            </Text>
+            <View style={styles.chapterBadge}>
+              <Text style={styles.chapterBadgeText} numberOfLines={1}>
+                {item.chapterTitle || item.chapterNumber || 'Chapter'}
+              </Text>
+            </View>
+            <Text style={styles.dateText}>{formattedDate}</Text>
+          </View>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.deleteButton}
+          onPress={() => handleDelete(index)}
+        >
+          <Text style={styles.deleteText}>Hapus</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  };
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Reading History</Text>
-      <FlatList
-        data={history}
-        renderItem={renderItem}
-        keyExtractor={(item, index) => index.toString()}
-        contentContainerStyle={styles.list}
-      />
+    <View style={[styles.container, { paddingTop: statusBarHeight }]}>
+      <View style={styles.headerBar}>
+        <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
+          <Ionicons name="chevron-back" size={26} color="#1C202E" />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Riwayat Membaca</Text>
+        <View style={{ width: 36 }} />
+      </View>
+
+      {history.length === 0 ? (
+        <View style={styles.emptyContainer}>
+          <Ionicons name="time-outline" size={48} color="#9EA5BA" style={{ marginBottom: 12 }} />
+          <Text style={styles.emptyText}>Belum ada riwayat membaca.</Text>
+          <TouchableOpacity
+            style={styles.browseButton}
+            onPress={() => navigation.navigate('Home')}
+          >
+            <Text style={styles.browseButtonText}>Mulai Membaca</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <FlatList
+          data={history}
+          renderItem={renderItem}
+          keyExtractor={(item, index) => index.toString()}
+          contentContainerStyle={styles.listContainer}
+          showsVerticalScrollIndicator={false}
+        />
+      )}
     </View>
   );
 };
@@ -95,41 +143,119 @@ const ReadingHistoryScreen = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    padding: 20,
-    backgroundColor: '#fff',
+    backgroundColor: '#F9FAFC',
+    paddingHorizontal: 20,
   },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginBottom: 20,
-  },
-  list: {
-    flexGrow: 1,
-  },
-  itemContainer: {
+  headerBar: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    borderBottomWidth: 1,
-    borderBottomColor: '#ccc',
-    paddingVertical: 15,
+    justifyContent: 'space-between',
+    marginBottom: 16,
+    paddingVertical: 8,
   },
-  item: {
+  backBtn: {
+    width: 36,
+    height: 36,
+    justifyContent: 'center',
+    alignItems: 'flex-start',
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#1C202E',
+  },
+  listContainer: {
+    paddingBottom: 30,
+  },
+  card: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 12,
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  cardContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
     flex: 1,
   },
-  chapterTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
+  cardImage: {
+    width: 64,
+    height: 64,
+    borderRadius: 12,
+    backgroundColor: '#EAECEF',
+  },
+  placeholderImage: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  textContainer: {
+    flex: 1,
+    marginLeft: 14,
+    justifyContent: 'center',
+  },
+  mangaTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#1C202E',
+    marginBottom: 4,
+  },
+  chapterBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#FFF0ED',
+    paddingVertical: 3,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+    marginBottom: 4,
+  },
+  chapterBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#FF7A59',
+  },
+  dateText: {
+    fontSize: 11,
+    color: '#A0A5B5',
   },
   deleteButton: {
-    backgroundColor: '#f00',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: '#FFF0ED',
+    marginLeft: 8,
   },
   deleteText: {
-    color: '#fff',
-    fontWeight: 'bold',
+    color: '#FF7A59',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  emptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingBottom: 60,
+  },
+  emptyText: {
+    color: '#8E94A4',
+    fontSize: 15,
+    marginBottom: 16,
+  },
+  browseButton: {
+    backgroundColor: '#56B8A5',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
+  browseButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
   },
 });
 
